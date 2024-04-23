@@ -92,10 +92,7 @@ fn handle_client(mut stream: TcpStream) {
             Ok(bytes_read) => {
                 if bytes_read == 0 {
                     // Conexão fechada pelo cliente
-                    println!(
-                        "Conexão fechada pelo cliente {}",
-                        stream.peer_addr().unwrap()
-                    );
+                    println!("Conexão fechada pelo cliente");
                     break;
                 }
                 let request: String = String::from_utf8_lossy(&buffer).to_string();
