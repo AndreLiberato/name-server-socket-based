@@ -56,22 +56,27 @@ impl ServerDescription {
         sd
     }
 
-    pub fn to_bytes(sd: ServerDescription) -> [u8; 38] {
-        let mut response: [u8; 38] = [0; 38];
+    pub fn to_bytes(sd: ServerDescription) -> [u8; 10] {
+        let mut response: [u8; 10] = [0; 10];
 
         let name_b: &[u8] = sd.service_name.as_bytes();
-        let ip: &[u8] = sd.server.ip.as_bytes();
-        let port: &[u8] = sd.server.port.as_bytes();
 
-        for index in 0..=38 {
-            if index < 32 {
-                response[index] = name_b[index];
-            } else if index < 36 {
-                response[index] = ip[index - 32];
-            } else if index < 38 {
-                response[index] = port[index - 38];
-            }
-        }
+        let ip: Vec<u8> = sd
+            .server
+            .ip
+            .split('.')
+            .map(|s| s.parse().unwrap())
+            .collect();
+
+        let port: [u8; 2] = [
+            sd.server.port[0..2].parse().unwrap(), // Converta os primeiros dois caracteres em u8
+            sd.server.port[2..4].parse().unwrap(), // Converta os próximos dois caracteres em u8
+        ];
+
+        response[..4].copy_from_slice(name_b);
+        response[4..8].copy_from_slice(&ip);
+        response[8..10].copy_from_slice(&port);
+
         response
     }
 }
@@ -121,6 +126,7 @@ impl Server {
     }
 
     pub fn start(&self) {
+        let mut sl: ServerList = Vec::new();
         match TcpListener::bind(self.bind_address()) {
             Ok(listener) => {
                 println!("Servidor iniciado. Escutando em {}", self.bind_address());
@@ -128,7 +134,7 @@ impl Server {
                     match stream {
                         Ok(stream) => {
                             println!("Nova conexão: {}", stream.peer_addr().unwrap());
-                            self.handle_client(stream);
+                            self.handle_client(stream, &mut sl);
                         }
                         Err(e) => {
                             eprintln!("Erro ao aceitar a conexão: {}", e);
@@ -142,9 +148,8 @@ impl Server {
         };
     }
 
-    fn handle_client(&self, mut stream: TcpStream) {
+    fn handle_client(&self, mut stream: TcpStream, service_list: &mut ServerList) {
         let mut buffer: [u8; 11] = [0; 11];
-        let mut sl: ServerList = Vec::new();
         loop {
             match stream.read(&mut buffer) {
                 Ok(bytes_read) => {
@@ -161,23 +166,33 @@ impl Server {
                         PayloadType::ServerSubscription => {
                             let server_d: ServerDescription =
                                 ServerDescription::new(&pl.content[..]);
-                            sl.push(server_d);
+                            service_list.push(server_d);
                             println!(
                                 "New Service Registred - service_name: {}; ip: {}; port: {}",
-                                sl.get(0).unwrap().service_name,
-                                sl.get(0).unwrap().server.ip,
-                                sl.get(0).unwrap().server.port
+                                service_list.get(0).unwrap().service_name,
+                                service_list.get(0).unwrap().server.ip,
+                                service_list.get(0).unwrap().server.port
                             );
 
                             let _ = stream.write(&[201_u8]);
                         }
                         PayloadType::ClientRequestServer => {
                             let client_r: ClientRequest = ClientRequest::new(&pl.content[..]);
-                            for server in sl.clone() {
+                            let mut not_find: bool = true;
+                            println!(
+                                "Solicitação de buscar de serviço: {}",
+                                client_r.service_name
+                            );
+                            for server in service_list.clone() {
                                 if server.service_name == client_r.service_name {
-                                    let b = ServerDescription::to_bytes(server.clone());
-                                    let _ = stream.write_all(&b[..]);
+                                    let b: [u8; 10] = ServerDescription::to_bytes(server);
+                                    let _ = stream.write(&b);
+                                    not_find = false;
+                                    break;
                                 }
+                            }
+                            if not_find {
+                                let _ = stream.write(&[44]);
                             }
                         }
                         PayloadType::Unknown => {
